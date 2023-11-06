@@ -91,6 +91,13 @@ impl Error for SessionError {
     }
 }
 
+/// Added to `Server::connection_events` on connect/disconnect
+pub enum ClientEvent {
+    Connected(SocketAddr),
+    Disconnected(SocketAddr),
+    TimedOut(SocketAddr),
+}
+
 /// A reference to an internal buffer containing a received message.
 pub struct MessageBuffer<'a>(BufferHandle<'a>);
 
@@ -208,6 +215,7 @@ pub struct Server<R: Runtime> {
     buffer_pool: BufferPool,
     sessions: HashMap<SessionKey, Session>,
     clients: HashMap<SocketAddr, Client>,
+    client_events: Vec<ClientEvent>,
     last_generate_periodic: Instant,
     last_cleanup: Instant,
     periodic_timer: Pin<Box<R::Timer>>,
@@ -256,6 +264,7 @@ impl<R: Runtime> Server<R> {
             buffer_pool: BufferPool::new(),
             sessions: HashMap::new(),
             clients: HashMap::new(),
+            client_events: Vec::new(),
             last_generate_periodic: Instant::now(),
             last_cleanup: Instant::now(),
             periodic_timer,
@@ -301,6 +310,11 @@ impl<R: Runtime> Server<R> {
         } else {
             false
         }
+    }
+
+    /// Draining iter over [`ClientEvent`]s for detecting newly established or disconnected clients.
+    pub fn drain_client_events(&mut self) -> std::vec::Drain<'_, ClientEvent> {
+        self.client_events.drain(..)
     }
 
     /// Disconect the given client, does nothing if the client is not currently connected.
@@ -576,18 +590,31 @@ impl<R: Runtime> Server<R> {
                     false
                 }
             });
-
-            self.clients.retain(|remote_addr, client| {
-                if !client.is_shutdown()
-                    && client.last_activity().elapsed() < RTC_CONNECTION_TIMEOUT
-                {
-                    true
-                } else {
-                    if !client.is_shutdown() {
-                        log::info!("connection timeout for client {}", remote_addr);
+            let remove_clients = self
+                .clients
+                .iter()
+                .filter_map(|(remote_addr, client)| {
+                    if client.is_shutdown()
+                        || client.last_activity().elapsed() >= RTC_CONNECTION_TIMEOUT
+                    {
+                        Some(remote_addr)
+                    } else {
+                        None
                     }
-                    log::info!("client {} removed", remote_addr);
-                    false
+                })
+                .copied()
+                .collect::<Vec<_>>();
+
+            remove_clients.iter().for_each(|remote_addr| {
+                if let Some(client) = self.clients.remove(remote_addr) {
+                    if client.is_shutdown() {
+                        log::info!("connection timeout for client {}", remote_addr);
+                        self.client_events
+                            .push(ClientEvent::Disconnected(*remote_addr));
+                    } else {
+                        log::info!("connection removed for client {}", remote_addr);
+                        self.client_events.push(ClientEvent::TimedOut(*remote_addr));
+                    }
                 }
             });
         }
