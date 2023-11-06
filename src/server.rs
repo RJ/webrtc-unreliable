@@ -151,7 +151,7 @@ impl SessionEndpoint {
 
         let SdpFields { ice_ufrag, mid, .. } = parse_sdp_fields(sdp_descriptor)
             .await
-            .map_err(|e| SessionError::StreamError(e.into()))?;
+            .map_err(|e| SessionError::StreamError(e))?;
 
         let (incoming_session, response) = {
             let mut rng = thread_rng();
@@ -358,10 +358,10 @@ impl<R: Runtime> Server<R> {
 
         match client.send_message(message_type, message) {
             Err(ClientError::NotConnected) | Err(ClientError::NotEstablished) => {
-                return Err(SendError::ClientNotConnected).into();
+                return Err(SendError::ClientNotConnected);
             }
             Err(ClientError::IncompletePacketWrite) => {
-                return Err(SendError::IncompleteMessageWrite).into();
+                return Err(SendError::IncompleteMessageWrite);
             }
             Err(err) => {
                 log::warn!(
@@ -370,7 +370,7 @@ impl<R: Runtime> Server<R> {
                     err
                 );
                 let _ = client.start_shutdown();
-                return Err(SendError::ClientNotConnected).into();
+                return Err(SendError::ClientNotConnected);
             }
             Ok(()) => {}
         }
@@ -395,11 +395,11 @@ impl<R: Runtime> Server<R> {
 
         let (message, remote_addr, message_type) = self.incoming_rtc.pop_front().unwrap();
         let message = MessageBuffer(self.buffer_pool.adopt(message));
-        return Ok(MessageResult {
+        Ok(MessageResult {
             message,
             message_type,
             remote_addr,
-        });
+        })
     }
 
     // Accepts new incoming WebRTC sessions, times out existing WebRTC sessions, sends outgoing UDP
@@ -530,29 +530,29 @@ impl<R: Runtime> Server<R> {
                             Client::new(&self.ssl_acceptor, self.buffer_pool.clone(), remote_addr)
                                 .expect("could not create new client instance"),
                         );
+                        self.client_events.push(ClientEvent::Connected(remote_addr));
                     }
                     HashMapEntry::Occupied(_) => {}
                 }
             }
-        } else {
-            if let Some(client) = self.clients.get_mut(&remote_addr) {
-                if let Err(err) = client.receive_incoming_packet(packet_buffer.into_owned()) {
-                    if !client.shutdown_started() {
-                        log::warn!(
-                            "client {} had unexpected error receiving UDP packet, shutting down: {}",
-                            remote_addr, err
-                        );
-                        let _ = client.start_shutdown();
-                    }
+        } else if let Some(client) = self.clients.get_mut(&remote_addr) {
+            if let Err(err) = client.receive_incoming_packet(packet_buffer.into_owned()) {
+                if !client.shutdown_started() {
+                    log::warn!(
+                        "client {} had unexpected error receiving UDP packet, shutting down: {}",
+                        remote_addr,
+                        err
+                    );
+                    let _ = client.start_shutdown();
                 }
-                self.outgoing_udp
-                    .extend(client.take_outgoing_packets().map(|p| (p, remote_addr)));
-                self.incoming_rtc.extend(
-                    client
-                        .receive_messages()
-                        .map(|(message_type, message)| (message, remote_addr, message_type)),
-                );
             }
+            self.outgoing_udp
+                .extend(client.take_outgoing_packets().map(|p| (p, remote_addr)));
+            self.incoming_rtc.extend(
+                client
+                    .receive_messages()
+                    .map(|(message_type, message)| (message, remote_addr, message_type)),
+            );
         }
     }
 
