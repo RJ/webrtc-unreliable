@@ -92,6 +92,7 @@ impl Error for SessionError {
 }
 
 /// Added to `Server::connection_events` on connect/disconnect
+#[derive(Debug, Clone)]
 pub enum ClientEvent {
     Connected(SocketAddr),
     Disconnected(SocketAddr),

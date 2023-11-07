@@ -9,7 +9,7 @@ mod stun;
 mod util;
 
 pub use client::{MessageType, MAX_MESSAGE_LEN};
-pub use server::{MessageBuffer, MessageResult, SendError, Server, SessionEndpoint};
+pub use server::{ClientEvent, MessageBuffer, MessageResult, SendError, Server, SessionEndpoint};
 
 #[cfg(feature = "tokio")]
 pub mod tokio;
